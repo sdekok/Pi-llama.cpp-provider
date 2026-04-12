@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc)",
-      "Bash(npx vitest:*)"
+      "Bash(npx vitest:*)",
+      "Bash(curl -s http://server.remotebandits.com:8000/props)",
+      "Bash(curl:*)",
+      "Bash(node -e ':*)"
     ]
   }
 }
