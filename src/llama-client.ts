@@ -3,6 +3,61 @@ export interface LlamaModel {
   object: 'model';
   created: number;
   owned_by: string;
+  status?: {
+    value?: string;
+    args?: string[];
+    preset?: string;
+  };
+}
+
+export interface ParsedModelArgs {
+  /** Per-request context window: floor(ctx-size / parallel). Null if not present in args. */
+  contextWindow: number | null;
+  /**
+   * Whether the model has extended reasoning enabled.
+   * True/false if --reasoning on/off is explicit; null means absent (fall back to name heuristic).
+   */
+  reasoning: boolean | null;
+}
+
+/**
+ * Extracts per-request context window and reasoning flag from a model's launch args.
+ * Router setups embed the full llama-server argv in each model's status.args, so this
+ * is the authoritative source on router deployments where /props returns n_ctx:0.
+ *
+ * Context: floor(ctx-size / parallel) — each parallel slot gets an equal share of the KV cache.
+ * Reasoning: explicit --reasoning on/off wins; absent means caller should fall back to name regex.
+ */
+export function parseModelArgs(model: LlamaModel): ParsedModelArgs {
+  const args = model.status?.args;
+  if (!args) return { contextWindow: null, reasoning: null };
+
+  // --- context window ---
+  let contextWindow: number | null = null;
+  const ctxIdx = args.indexOf('--ctx-size');
+  if (ctxIdx !== -1 && ctxIdx + 1 < args.length) {
+    const ctxSize = parseInt(args[ctxIdx + 1], 10);
+    if (!isNaN(ctxSize) && ctxSize > 0) {
+      const parallelIdx = args.indexOf('--parallel');
+      let parallel = 1;
+      if (parallelIdx !== -1 && parallelIdx + 1 < args.length) {
+        const p = parseInt(args[parallelIdx + 1], 10);
+        if (!isNaN(p) && p > 0) parallel = p;
+      }
+      contextWindow = Math.floor(ctxSize / parallel);
+    }
+  }
+
+  // --- reasoning ---
+  let reasoning: boolean | null = null;
+  const reasoningIdx = args.indexOf('--reasoning');
+  if (reasoningIdx !== -1 && reasoningIdx + 1 < args.length) {
+    const val = args[reasoningIdx + 1].toLowerCase();
+    if (val === 'on') reasoning = true;
+    else if (val === 'off') reasoning = false;
+  }
+
+  return { contextWindow, reasoning };
 }
 
 export interface LlamaChatCompletionResponse {
@@ -38,7 +93,10 @@ export class LlamaClient {
   private baseUrl: string;
 
   constructor(baseUrl: string) {
-    this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
+    // Strip trailing slash and /v1 suffix so that root-level endpoints
+    // (/health, /props) and versioned endpoints (/v1/models) are all constructed
+    // correctly regardless of whether the caller's baseUrl includes /v1.
+    this.baseUrl = baseUrl.replace(/\/$/, '').replace(/\/v1$/, '');
   }
 
   async getStatus(): Promise<{ ok: boolean; message: string }> {

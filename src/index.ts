@@ -1,17 +1,49 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { LlamaClient, ModelMetadata } from "./llama-client";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { LlamaClient, parseModelArgs } from "./llama-client";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-async function getBaseUrl(ctx: any): Promise<string> {
+/**
+ * Find all providers in models.json that declared api:"llamacpp".
+ * Returns a map of providerName -> baseUrl.
+ *
+ * We read models.json directly rather than scanning the model registry because
+ * a provider entry with no "models" array produces no registry entries — the
+ * registry only tracks individual models, not provider-level config.
+ */
+export function findConfiguredServers(): Map<string, string> {
+  const servers = new Map<string, string>();
+  const modelsPath = path.join(getAgentDir(), "models.json");
+
+  if (!fs.existsSync(modelsPath)) return servers;
+
+  try {
+    const config = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
+    if (config.providers && typeof config.providers === "object") {
+      for (const [name, provider] of Object.entries(config.providers as Record<string, any>)) {
+        if (provider.api === "llamacpp" && provider.baseUrl) {
+          servers.set(name, provider.baseUrl);
+        }
+      }
+    }
+  } catch (e) {}
+
+  return servers;
+}
+
+/**
+ * Resolve the server URL when no models.json config exists.
+ * Precedence: env var → project settings → global settings → default.
+ */
+export async function getFallbackBaseUrl(ctx: ExtensionContext): Promise<string> {
   if (process.env.LLAMA_CPP_BASE_URL) return process.env.LLAMA_CPP_BASE_URL;
 
   const projectSettingsPath = path.join(ctx.cwd, ".pi", "settings.json");
   if (fs.existsSync(projectSettingsPath)) {
     try {
-      const content = fs.readFileSync(projectSettingsPath, "utf8");
-      const settings = JSON.parse(content);
+      const settings = JSON.parse(fs.readFileSync(projectSettingsPath, "utf8"));
       if (settings.llama?.baseUrl) return settings.llama.baseUrl;
     } catch (e) {}
   }
@@ -19,154 +51,93 @@ async function getBaseUrl(ctx: any): Promise<string> {
   const globalSettingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
   if (fs.existsSync(globalSettingsPath)) {
     try {
-      const content = fs.readFileSync(globalSettingsPath, "utf8");
-      const settings = JSON.parse(content);
+      const settings = JSON.parse(fs.readFileSync(globalSettingsPath, "utf8"));
       if (settings.llama?.baseUrl) return settings.llama.baseUrl;
     } catch (e) {}
   }
 
-  return "http://localhost:8080"; 
+  return "http://localhost:8080";
+}
+
+export async function registerLlamaProvider(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  providerName: string,
+  baseUrl: string
+): Promise<void> {
+  const client = new LlamaClient(baseUrl);
+
+  const status = await client.getStatus();
+  if (!status.ok) {
+    console.error(`[${providerName}] Server not found at ${baseUrl}: ${status.message}`);
+    return;
+  }
+
+  const [models, metadata] = await Promise.all([
+    client.getModels(),
+    client.getActiveModelMetadata(),
+  ]);
+
+  const dynamicModels = models.map((m) => {
+    const parsed = parseModelArgs(m);
+    // Prefer per-model ctx from status.args (works on router setups where /props
+    // returns n_ctx:0). Fall back to /props metadata for single-instance servers.
+    const ctx = parsed.contextWindow ?? metadata?.contextWindow ?? 4096;
+    // Explicit --reasoning on/off in args wins; fall back to name heuristic.
+    const reasoning = parsed.reasoning ?? /coder|r1|deepseek|think|reason/i.test(m.id);
+    return {
+      id: m.id,
+      name: m.id,
+      contextWindow: ctx,
+      maxTokens: ctx,
+      reasoning,
+      input: ["text"] as ("text" | "image")[],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+  });
+
+  // Check for duplicate OpenAI provider at the same base URL
+  const openaiDupes = ctx.modelRegistry
+    .getAll()
+    .filter((m: any) => m.provider === "openai" && m.baseUrl === baseUrl);
+
+  pi.registerProvider(providerName, {
+    baseUrl,
+    api: "openai-responses", // llama.cpp implements OpenAI-compatible endpoints
+    apiKey: "none",          // local/remote models without auth
+    models: dynamicModels,
+  });
+
+  let msg = `[${providerName}] Registered ${dynamicModels.length} model(s)`;
+  if (metadata?.contextWindow) msg += ` (context: ${metadata.contextWindow})`;
+  if (openaiDupes.length > 0)
+    msg += `\n⚠️  Duplicate: ${openaiDupes.length} OpenAI model(s) also configured for ${baseUrl}`;
+
+  ctx.ui.notify(msg, openaiDupes.length > 0 ? "warning" : "info");
 }
 
 export default async function (pi: ExtensionAPI) {
-  // We use the resources_discover event to inject our provider before pi finishes startup
   pi.on("resources_discover", async (event, ctx) => {
-    const baseUrl = await getBaseUrl(ctx);
-    const client = new LlamaClient(baseUrl);
-
     try {
-      // 1. Check if server is alive
-      const status = await client.getStatus();
-      if (!status.ok) {
-        console.error(`[llama-cpp] Server not found at ${baseUrl}: ${status.message}`);
-        return {}; 
-      }
+      const configured = findConfiguredServers();
 
-      // 2. Fetch models and metadata
-      const [models, metadata] = await Promise.all([
-        client.getModels(),
-        client.getActiveModelMetadata()
-      ]);
-
-      // 2.5. Check for duplicate OpenAI provider configuration
-      const existingModels = ctx.modelRegistry.getAll();
-      const openaiModelsWithSameBase = existingModels.filter(
-        (m: any) => m.provider === "openai" && m.baseUrl === baseUrl
-      );
-
-      if (openaiModelsWithSameBase.length > 0) {
-        console.warn(
-          `[llama-cpp] Found ${openaiModelsWithSameBase.length} OpenAI models already configured for ${baseUrl}. ` +
-          `Registering llama-cpp provider anyway with auto-detected metadata.`
+      if (configured.size > 0) {
+        // Register each server declared in models.json with api:"llamacpp"
+        await Promise.all(
+          Array.from(configured.entries()).map(([name, url]) =>
+            registerLlamaProvider(pi, ctx, name, url)
+          )
         );
+      } else {
+        // Fall back to single auto-discovered server
+        const baseUrl = await getFallbackBaseUrl(ctx);
+        await registerLlamaProvider(pi, ctx, "llama-cpp", baseUrl);
       }
-
-      // 3. Map to pi Provider format
-      const dynamicModels: any[] = models.map(m => ({
-        id: m.id,
-        name: m.id,
-        contextWindow: metadata?.contextWindow || 4096,
-        parameterSize: metadata?.parameterSize,
-        family: metadata?.family,
-        reasoning: /coder|r1|deepseek|think|reason/i.test(m.id),
-        input: ["text"], // Default fallback for pi's requirement
-        cost: { input: 0, output: 0 }, // Free local models
-        maxTokens: metadata?.contextWindow || 4096
-      }));
-
-      // 4. Register the provider dynamically
-      pi.registerProvider("llama-cpp", {
-        baseUrl: baseUrl,
-        api: "openai-responses", // llama.cpp is OpenAI compatible
-        models: dynamicModels
-      });
-
-      // Notify user with context window info and duplication warning if applicable
-      let notificationMsg = `Registered ${dynamicModels.length} llama.cpp model(s)`;
-      if (metadata?.contextWindow) {
-        notificationMsg += ` (context: ${metadata.contextWindow})`;
-      }
-
-      if (openaiModelsWithSameBase.length > 0) {
-        notificationMsg += `\n⚠️  Warning: ${openaiModelsWithSameBase.length} OpenAI model(s) also configured for ${baseUrl}`;
-      }
-
-      ctx.ui.notify(notificationMsg, openaiModelsWithSameBase.length > 0 ? "warning" : "info");
-
     } catch (error: any) {
       console.error(`[llama-cpp] Failed to register provider: ${error.message}`);
     }
 
-    return {}; 
+    return {};
   });
 
-  // Keep diagnostic commands for manual troubleshooting
-  pi.registerCommand("llama-status", {
-    description: "Check connection status to llama.cpp server",
-    handler: async (_args, ctx) => {
-      const baseUrl = await getBaseUrl(ctx);
-      const client = new LlamaClient(baseUrl);
-      const status = await client.getStatus();
-      if (status.ok) {
-        ctx.ui.notify("llama.cpp is connected!", "info");
-      } else {
-        ctx.ui.notify(`Connection failed: ${status.message}`, "error");
-      }
-    },
-  });
-
-  pi.registerCommand("llama-models", {
-    description: "List models currently loaded in the llama.cpp server",
-    handler: async (_args, ctx) => {
-      try {
-        const baseUrl = await getBaseUrl(ctx);
-        const client = new LlamaClient(baseUrl);
-        const models = await client.getModels();
-        if (models.length === 0) {
-          ctx.ui.notify("No models found in llama.cpp server.", "info");
-          return;
-        }
-
-        let modelList = "📍 Active Models:\n";
-        for (const m of models) {
-          modelList += `  - ${m.id}\n`;
-        }
-        ctx.ui.notify(modelList, "info");
-      } catch (error: any) {
-        ctx.ui.notify(`Error fetching models: ${error.message}`, "error");
-      }
-    },
-  });
-
-  pi.registerCommand("llama-info", {
-    description: "Show llama.cpp server properties (parameters, context length)",
-    handler: async (_args, ctx) => {
-      try {
-        const baseUrl = await getBaseUrl(ctx);
-        const client = new LlamaClient(baseUrl);
-        const props = await client.getProps();
-
-        let infoStr = "📊 Llama.cpp Server Properties:\n";
-        if (props && typeof props === 'object') {
-          const keys = Object.keys(props);
-          if (keys.length > 0) {
-            infoStr += `  Found ${keys.length} properties.\n`;
-            for (const key of keys) {
-              if (key.toLowerCase().includes('ctx') || 
-                  key.toLowerCase().includes('param') || 
-                  key.toLowerCase().includes('model')) {
-                infoStr += `  ${key}: ${JSON.stringify(props[key])}\n`;
-              }
-            }
-          } else {
-             infoStr += "  No properties found.\n";
-          }
-        }
-
-        ctx.ui.notify(infoStr, "info");
-      } catch (error: any) {
-        ctx.ui.notify(`Error fetching info: ${error.message}`, "error");
-      }
-    },
-  });
 }

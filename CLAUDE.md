@@ -56,14 +56,31 @@ Installs the extension into the pi-coding-agent.
 
 ### Configuration Resolution
 
-The extension determines the llama.cpp server URL using this precedence:
+The extension supports two modes depending on whether servers are declared in `models.json`.
+
+**Preferred: declare servers in `models.json` using `api: "llamacpp"`**
+
+```json
+{
+  "providers": {
+    "my-local":  { "baseUrl": "http://localhost:8080",               "api": "llamacpp", "apiKey": "none" },
+    "my-remote": { "baseUrl": "http://server.example.com:8000",      "api": "llamacpp", "apiKey": "none" }
+  }
+}
+```
+
+The extension scans all registered models for `api === "llamacpp"` (regardless of provider name), connects to each server, discovers models via `/props` and `/v1/models`, then re-registers each provider with `api: "openai-responses"` and live metadata. Multiple servers are supported. The provider name in pi's model picker matches whatever name the user chose.
+
+**Fallback: single auto-discovered server**
+
+If no `api: "llamacpp"` providers are found in the registry, the extension resolves a single server URL using this precedence and registers it as `"llama-cpp"`:
 
 1. **Environment Variable**: `LLAMA_CPP_BASE_URL`
 2. **Project Settings**: `.pi/settings.json` with `{ "llama": { "baseUrl": "..." } }`
 3. **Global Settings**: `~/.pi/agent/settings.json` with same structure
 4. **Default**: `http://localhost:8080`
 
-Configuration is read in `getBaseUrl()` in index.ts.
+Configuration logic lives in `findConfiguredServers()` and `getFallbackBaseUrl()` in index.ts.
 
 ### Provider Auto-Registration
 
