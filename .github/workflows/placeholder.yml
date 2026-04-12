@@ -1,0 +1,4 @@
+import { defineWorkflow } from 'actions/workflows';
+
+// This is just a placeholder for the thought process. 
+// I will actually write the .github/workflows/ci.yml file next.

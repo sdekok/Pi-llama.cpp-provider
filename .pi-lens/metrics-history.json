@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "files": {
+    "src/llama-client.ts": {
+      "latest": {
+        "commit": "unknown",
+        "timestamp": "2026-04-11T23:34:56.903Z",
+        "mi": 39.9,
+        "cognitive": 32,
+        "nesting": 4,
+        "lines": 73,
+        "maxCyclomatic": 1,
+        "entropy": 5.64
+      },
+      "history": [
+        {
+          "commit": "unknown",
+          "timestamp": "2026-04-11T23:02:00.882Z",
+          "mi": 100,
+          "cognitive": 0,
+          "nesting": 0,
+          "lines": 0,
+          "maxCyclomatic": 1,
+          "entropy": 0
+        },
+        {
+          "commit": "unknown",
+          "timestamp": "2026-04-11T23:34:56.903Z",
+          "mi": 39.9,
+          "cognitive": 32,
+          "nesting": 4,
+          "lines": 73,
+          "maxCyclomatic": 1,
+          "entropy": 5.64
+        }
+      ],
+      "trend": "regressing"
+    },
+    "src/index.ts": {
+      "latest": {
+        "commit": "unknown",
+        "timestamp": "2026-04-11T23:36:36.891Z",
+        "mi": 40.5,
+        "cognitive": 69,
+        "nesting": 7,
+        "lines": 100,
+        "maxCyclomatic": 22,
+        "entropy": 6.04
+      },
+      "history": [
+        {
+          "commit": "unknown",
+          "timestamp": "2026-04-11T23:03:02.995Z",
+          "mi": 100,
+          "cognitive": 0,
+          "nesting": 0,
+          "lines": 0,
+          "maxCyclomatic": 1,
+          "entropy": 0
+        },
+        {
+          "commit": "unknown",
+          "timestamp": "2026-04-11T23:36:36.891Z",
+          "mi": 40.5,
+          "cognitive": 69,
+          "nesting": 7,
+          "lines": 100,
+          "maxCyclomatic": 22,
+          "entropy": 6.04
+        }
+      ],
+      "trend": "regressing"
+    },
+    "tests/llama-client.test.ts": {
+      "latest": {
+        "commit": "unknown",
+        "timestamp": "2026-04-12T00:03:07.215Z",
+        "mi": 100,
+        "cognitive": 0,
+        "nesting": 0,
+        "lines": 0,
+        "maxCyclomatic": 1,
+        "entropy": 0
+      },
+      "history": [
+        {
+          "commit": "unknown",
+          "timestamp": "2026-04-12T00:03:07.215Z",
+          "mi": 100,
+          "cognitive": 0,
+          "nesting": 0,
+          "lines": 0,
+          "maxCyclomatic": 1,
+          "entropy": 0
+        }
+      ],
+      "trend": "stable"
+    }
+  },
+  "capturedAt": "2026-04-12T00:03:12.989Z"
+}
