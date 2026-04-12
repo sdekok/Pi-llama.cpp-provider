@@ -6,3 +6,5 @@ yarn-debug.log*
 yarn-error.log*
 .env
 .DS_Store
+.claude/
+.pi-lens/
