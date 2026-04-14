@@ -63,11 +63,11 @@ pi install ./path/to/llama.cpp-pi-connector
 ## Development
 
 ```bash
-# Build
-npx tsc
+# Build (cleans dist/ and recompiles)
+npm run build
 
 # Test
-npx vitest
+npm test
 
 # Run a single test file
 npx vitest tests/llama-client.test.ts
